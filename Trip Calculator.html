@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Astra & Bros - Trip Calc v10.0</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f4f4; margin: 0; padding: 10px; display: flex; flex-direction: column; align-items: center; }
+        .container { background: #fff; padding: 20px; border-radius: 15px; border: 1px solid #ddd; width: 100%; max-width: 480px; box-shadow: 0 5px 25px rgba(0,0,0,0.1); z-index: 1000; }
+        h1 { color: #eb7600; text-align: center; margin: 0 0 15px 0; font-size: 1.2rem; text-transform: uppercase; }
+        
+        .input-group { margin-bottom: 15px; position: relative; }
+        label { display: block; margin-bottom: 5px; color: #666; font-size: 0.75rem; font-weight: bold; }
+        input, select { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; background: #fdfdfd; }
+        
+        /* Sugestões (Autocomplete) */
+        .suggestions { position: absolute; width: 100%; background: white; border: 1px solid #ccc; border-top: none; z-index: 2000; max-height: 200px; overflow-y: auto; display: none; border-radius: 0 0 8px 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .suggestions div { padding: 10px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid #eee; }
+        .suggestions div:hover { background: #f0f0f0; }
+
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .btn-calc { width: 100%; padding: 15px; margin-top: 10px; background: #eb7600; border: none; color: white; font-weight: bold; cursor: pointer; border-radius: 8px; font-size: 1rem; }
+        
+        .res-table { width: 100%; margin-top: 20px; border-collapse: collapse; background: #fafafa; border-radius: 10px; overflow: hidden; display: none; border: 1px solid #eee; }
+        .res-table th { background: #eee; padding: 10px; font-size: 0.7rem; color: #888; text-align: center; }
+        .res-table td { padding: 12px; text-align: center; border-top: 1px solid #eee; }
+        .total { font-weight: bold; color: #28a745; font-size: 1.1rem; }
+        
+        #map { width: 100%; height: 380px; margin-top: 15px; border-radius: 15px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🚀 Astra & Bros Trip Calc v10.0</h1>
+    
+    <div class="input-group">
+        <label>PARTIDA:</label>
+        <input type="text" id="startInput" placeholder="Digite a origem..." autocomplete="off">
+        <div id="startSuggest" class="suggestions"></div>
+    </div>
+    
+    <div class="input-group">
+        <label>DESTINO:</label>
+        <input type="text" id="endInput" placeholder="Digite o destino..." autocomplete="off">
+        <div id="endSuggest" class="suggestions"></div>
+    </div>
+
+    <div class="grid">
+        <div class="input-group">
+            <label>VEÍCULO:</label>
+            <select id="vehicle" onchange="updateConsumo()">
+                <option value="astra">Astra SS 2.0</option>
+                <option value="bros">Bros 160 (2018)</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label>COMBUSTÍVEL:</label>
+            <select id="fuel" onchange="updateConsumo()">
+                <option value="gasolina">Gasolina</option>
+                <option value="etanol">Etanol</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="input-group">
+            <label>KM/L:</label>
+            <input type="number" id="cons" value="9.5" step="0.1">
+        </div>
+        <div class="input-group">
+            <label>PREÇO LITRO (R$):</label>
+            <input type="number" id="price" value="6.15" step="0.01">
+        </div>
+    </div>
+
+    <button class="btn-calc" onclick="calculateByInput()">TRAÇAR ROTA</button>
+
+    <table class="res-table" id="resTable">
+        <thead>
+            <tr><th>DETALHES</th><th>SÓ IDA</th><th>IDA E VOLTA</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>DISTÂNCIA</td><td><span id="d1">0</span> km</td><td><span id="d2">0</span> km</td></tr>
+            <tr><td>LITROS</td><td><span id="l1">0</span> L</td><td><span id="l2">0</span> L</td></tr>
+            <tr><td><strong>CUSTO</strong></td><td class="total">R$ <span id="v1">0</span></td><td class="total">R$ <span id="v2">0</span></td></tr>
+        </tbody>
+    </table>
+
+    <button onclick="location.reload()" style="background:#6c757d; color:white; border:none; padding:8px; border-radius:6px; margin-top:15px; cursor:pointer; width:100%;">Limpar Tudo</button>
+</div>
+
+<div id="map"></div>
+
+<script>
+    const specs = { astra: { gasolina: 9.5, etanol: 7.0 }, bros: { gasolina: 40.0, etanol: 32.0 } };
+    const map = L.map('map').setView([-11.66, -38.98], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    let waypoints = [null, null];
+    let markers = [null, null];
+    let routing = null;
+
+    function updateConsumo() {
+        const v = document.getElementById('vehicle').value;
+        const f = document.getElementById('fuel').value;
+        document.getElementById('cons').value = specs[v][f];
+        
+        // CORREÇÃO: Atualiza o preço padrão para não usar preço de gasolina no etanol
+        const precosDefault = { gasolina: 6.15, etanol: 4.35 };
+        document.getElementById('price').value = precosDefault[f];
+        
+        if (waypoints[0] && waypoints[1]) calcRoute();
+    }
+
+    async function getSuggestions(query, targetId) {
+        if (query.length < 3) return;
+        const response = await fetch(`https://photon.komoot.io/api/?q=${query}&limit=5&lat=-11.66&lon=-38.98`);
+        const data = await response.json();
+        const suggestBox = document.getElementById(targetId);
+        suggestBox.innerHTML = "";
+        suggestBox.style.display = "block";
+
+        data.features.forEach(f => {
+            const div = document.createElement("div");
+            const name = `${f.properties.name || ""} ${f.properties.city || ""} ${f.properties.state || ""}`;
+            div.innerText = name;
+            div.onclick = () => {
+                const coords = L.latLng(f.geometry.coordinates[1], f.geometry.coordinates[0]);
+                selectPoint(coords, name, targetId === 'startSuggest' ? 0 : 1);
+                suggestBox.style.display = "none";
+            };
+            suggestBox.appendChild(div);
+        });
+    }
+
+    document.getElementById('startInput').oninput = (e) => getSuggestions(e.target.value, 'startSuggest');
+    document.getElementById('endInput').oninput = (e) => getSuggestions(e.target.value, 'endSuggest');
+
+    function selectPoint(latlng, name, index) {
+        if (index === 0) document.getElementById('startInput').value = name;
+        else document.getElementById('endInput').value = name;
+
+        if (markers[index]) map.removeLayer(markers[index]);
+        markers[index] = L.marker(latlng).addTo(map);
+        waypoints[index] = latlng;
+
+        if (waypoints[0] && waypoints[1]) calcRoute();
+    }
+
+    map.on('click', async (e) => {
+        const index = waypoints[0] === null ? 0 : (waypoints[1] === null ? 1 : null);
+        if (index === null) { resetMap(); return; }
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${e.latlng.lat}&lon=${e.latlng.lng}`);
+        const data = await res.json();
+        selectPoint(e.latlng, data.display_name.split(',')[0], index);
+    });
+
+    function calculateByInput() {
+        if (waypoints[0] && waypoints[1]) calcRoute();
+        else alert("Selecione os pontos nas sugestões ou clique no mapa!");
+    }
+
+    function calcRoute() {
+        if (routing) map.removeControl(routing);
+        routing = L.Routing.control({
+            waypoints: waypoints,
+            lineOptions: { styles: [{ color: '#eb7600', weight: 6 }] },
+            createMarker: () => null
+        }).on('routesfound', (e) => {
+            const d = e.routes[0].summary.totalDistance / 1000;
+            const c = parseFloat(document.getElementById('cons').value);
+            const p = parseFloat(document.getElementById('price').value);
+
+            document.getElementById('d1').innerText = d.toFixed(1);
+            document.getElementById('d2').innerText = (d * 2).toFixed(1);
+            document.getElementById('l1').innerText = (d / c).toFixed(2);
+            document.getElementById('l2').innerText = ((d * 2) / c).toFixed(2);
+            document.getElementById('v1').innerText = ((d / c) * p).toFixed(2);
+            document.getElementById('v2').innerText = (((d * 2) / c) * p).toFixed(2);
+            document.getElementById('resTable').style.display = 'table';
+        }).addTo(map);
+    }
+</script>
+
+</body>
+</html>
